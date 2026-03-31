@@ -30,11 +30,20 @@ class GeminiAdapter(BaseAdapter):
             )
             response = model.generate_content(req.prompt)
             elapsed = int((time.monotonic() - start) * 1000)
+            # safety フィルターで candidates が空の場合 response.text は ValueError を投げる
+            if not response.candidates:
+                return make_error_response(
+                    req.request_id, req.role, req.model,
+                    "MODEL_ERROR", "Response blocked by safety filter", elapsed,
+                )
             content = response.text
             usage = response.usage_metadata
+            # 途中停止時は candidates_token_count が None になりうる
+            prompt_tokens = usage.prompt_token_count or 0
+            candidates_tokens = usage.candidates_token_count or 0
             return make_success_response(
                 req.request_id, req.role, req.model, content,
-                usage.prompt_token_count, usage.candidates_token_count, elapsed,
+                prompt_tokens, candidates_tokens, elapsed,
             )
         except google_exceptions.Unauthenticated as e:
             elapsed = int((time.monotonic() - start) * 1000)

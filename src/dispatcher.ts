@@ -43,7 +43,9 @@ function sanitizeStderr(stderr: string): string {
   return firstLine.length > 200 ? firstLine.slice(0, 200) + '...' : firstLine || 'Adapter crashed with no output'
 }
 
-export function buildEnvelope(requestId: string, results: AdapterResponse[]): EnvelopeResponse {
+// requestId は results[0] から導出。results が空の場合は fallbackRequestId を使用
+export function buildEnvelope(results: AdapterResponse[], fallbackRequestId = 'unknown'): EnvelopeResponse {
+  const requestId = results[0]?.request_id ?? fallbackRequestId
   const successCount = results.filter(r => r.status === 'success').length
   const errorCount = results.filter(r => r.status === 'error').length
   // wall-clock latency（並列実行の最長を採用）
@@ -96,13 +98,19 @@ async function callAdapter(
   }
 
   return new Promise((resolve) => {
+    const startMs = Date.now()
     const proc = spawn('python', [resolvedAdapter], {
       env: buildAdapterEnv(ai),
       cwd: adapterDir,  // adapterDir をCWDに固定（sys.path の相対解決を安定化）
     })
     let stdout = ''
     let stderr = ''
+    // タイマー発火と close イベントの二重 resolve を防ぐフラグ
+    let settled = false
+
     const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
       proc.kill()
       resolve({
         version: PROTOCOL_VERSION,
@@ -117,12 +125,33 @@ async function callAdapter(
       })
     }, roleTimeoutMs)
 
+    // spawn 失敗（python が PATH にない等）による EPIPE/ENOENT を捕捉
+    proc.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({
+        version: PROTOCOL_VERSION,
+        request_id: req.request_id,
+        role: req.role,
+        model: req.model,
+        content: null,
+        tokens: null,
+        latency_ms: Date.now() - startMs,
+        status: 'error',
+        error: { code: 'ADAPTER_CRASH', message: `Failed to spawn adapter: ${err.message}`, retriable: false, retry_after_ms: null },
+      })
+    })
+
     proc.stdin.write(JSON.stringify(req))
     proc.stdin.end()
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
     proc.on('close', () => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
+      const elapsed = Date.now() - startMs
       try {
         resolve(JSON.parse(stdout.trim()) as AdapterResponse)
       } catch {
@@ -133,7 +162,7 @@ async function callAdapter(
           model: req.model,
           content: null,
           tokens: null,
-          latency_ms: 0,
+          latency_ms: elapsed,
           status: 'error',
           error: { code: 'ADAPTER_CRASH', message: sanitizeStderr(stderr), retriable: false, retry_after_ms: null },
         })

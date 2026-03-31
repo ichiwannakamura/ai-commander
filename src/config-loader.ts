@@ -16,6 +16,8 @@ export interface AppConfig {
   api_keys: Record<string, string>
   timeouts: { global_timeout_s: number; role_timeout_s: number; retries: number }
   mcp: { port: number; host: string }
+  // config.yaml の default_role フィールド（省略時は roles の先頭キー）
+  default_role?: string
 }
 
 const ENV_VAR_RE = /^\$\{([^}]+)\}$/
@@ -28,7 +30,14 @@ export function resolveApiKey(value: string, aiProvider?: string): string {
   }
   // 2. ${ENV_VAR} 参照 → 汎用環境変数
   const match = value.match(ENV_VAR_RE)
-  if (match) return process.env[match[1]] ?? ''
+  if (match) {
+    const resolved = process.env[match[1]] ?? ''
+    if (!resolved) {
+      // 未設定の場合は起動時に警告（後で AUTH_FAILED になる前に気づけるよう）
+      console.warn(`WARNING: ${match[1]} is not set — api_keys.${aiProvider ?? 'unknown'} will be empty`)
+    }
+    return resolved
+  }
   // 3. 空文字（Ollamaなど）はそのまま
   if (value === '') return ''
   // 4. 平文直書き → 起動を拒否（セキュリティ）
@@ -71,5 +80,6 @@ export function loadConfig(rootDir: string): AppConfig {
     api_keys: resolvedKeys,
     timeouts: timeoutsRaw ?? { global_timeout_s: 30, role_timeout_s: 10, retries: 2 },
     mcp: mcpRaw ?? { port: 3000, host: '127.0.0.1' },
+    default_role: typeof raw['default_role'] === 'string' ? raw['default_role'] : undefined,
   }
 }

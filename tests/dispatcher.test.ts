@@ -8,7 +8,7 @@ describe('buildEnvelope', () => {
       { version: '1', request_id: 'r1', role: 'coder', model: 'm', content: 'ok',
         tokens: { input: 10, output: 20 }, latency_ms: 100, status: 'success' },
     ]
-    const env = buildEnvelope('r1', results)
+    const env = buildEnvelope(results)
     expect(env.overall_status).toBe('success')
     expect(env.exit_code).toBe(0)
     expect(env.summary.success).toBe(1)
@@ -23,7 +23,7 @@ describe('buildEnvelope', () => {
         tokens: null, latency_ms: 200, status: 'error',
         error: { code: 'ROLE_TIMEOUT', message: 'timeout', retriable: true, retry_after_ms: null } },
     ]
-    const env = buildEnvelope('r1', results)
+    const env = buildEnvelope(results)
     expect(env.overall_status).toBe('partial_success')
     expect(env.exit_code).toBe(2)
   })
@@ -34,7 +34,7 @@ describe('buildEnvelope', () => {
         tokens: null, latency_ms: 100, status: 'error',
         error: { code: 'AUTH_FAILED', message: 'bad key', retriable: false, retry_after_ms: null } },
     ]
-    const env = buildEnvelope('r1', results)
+    const env = buildEnvelope(results)
     expect(env.overall_status).toBe('error')
     expect(env.exit_code).toBe(1)
   })

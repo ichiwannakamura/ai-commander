@@ -33,9 +33,12 @@ class OpenAIAdapter(BaseAdapter):
             )
             elapsed = int((time.monotonic() - start) * 1000)
             content = response.choices[0].message.content or ""
+            # usage は streaming 等のエッジケースで None になりうるため防御的に取得
+            prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+            completion_tokens = response.usage.completion_tokens if response.usage else 0
             return make_success_response(
                 req.request_id, req.role, req.model, content,
-                response.usage.prompt_tokens, response.usage.completion_tokens, elapsed,
+                prompt_tokens, completion_tokens, elapsed,
             )
         except openai.AuthenticationError as e:
             elapsed = int((time.monotonic() - start) * 1000)

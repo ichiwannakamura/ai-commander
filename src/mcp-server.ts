@@ -12,7 +12,8 @@ export async function startMcpServer(config: AppConfig, adapterDir: string): Pro
     version: '0.1.0',
   })
 
-  // 各ロールをMCPツールとして登録
+  // 各ロールをMCPツールとして登録（起動時の config スナップショットに基づく静的登録）
+  // roles.yaml を変更した場合はサーバーを再起動すること（`ai-cmd serve`）
   for (const [roleName, role] of Object.entries(config.roles)) {
     server.tool(
       roleName,
@@ -28,7 +29,7 @@ export async function startMcpServer(config: AppConfig, adapterDir: string): Pro
           globalTimeoutMs: config.timeouts.global_timeout_s * 1000,
           retries: config.timeouts.retries,
         })
-        const envelope = buildEnvelope(results[0]?.request_id ?? 'unknown', results)
+        const envelope = buildEnvelope(results)
         return { content: [{ type: 'text' as const, text: formatJson(envelope) }] }
       }
     )
@@ -48,7 +49,7 @@ export async function startMcpServer(config: AppConfig, adapterDir: string): Pro
         globalTimeoutMs: config.timeouts.global_timeout_s * 1000,
         retries: config.timeouts.retries,
       })
-      const envelope = buildEnvelope(results[0]?.request_id ?? 'unknown', results)
+      const envelope = buildEnvelope(results)
       return { content: [{ type: 'text' as const, text: formatJson(envelope) }] }
     }
   )

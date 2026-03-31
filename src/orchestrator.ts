@@ -28,6 +28,8 @@ export function autoDetectRole(prompt: string, config: AppConfig): string {
   for (const [role, keywords] of Object.entries(ROLE_KEYWORDS)) {
     if (role in config.roles && keywords.some(k => lower.includes(k))) return role
   }
-  // デフォルト: 最初のロール
-  return Object.keys(config.roles)[0] ?? 'coder'
+  // デフォルト: config.yaml の default_role → roles の先頭キー の順で解決
+  // 注意: Object.keys の順序は挿入順（V8）だが言語仕様として保証されない。
+  //       明示的なデフォルトが必要な場合は config.yaml に default_role を設定すること。
+  return config.default_role ?? Object.keys(config.roles)[0] ?? 'coder'
 }

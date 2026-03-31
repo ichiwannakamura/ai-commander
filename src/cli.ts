@@ -72,7 +72,7 @@ program
       globalTimeoutMs,
       retries: config.timeouts.retries,
     })
-    const envelope = buildEnvelope(results[0]?.request_id ?? 'unknown', results)
+    const envelope = buildEnvelope(results)
 
     if (opts.json) {
       console.log(formatJson(envelope))
@@ -118,7 +118,8 @@ roles
       process.exit(1)
     }
     raw.roles[name] = { ai: opts.ai, model: opts.model, ...(opts.system ? { system: opts.system } : {}) }
-    fs.writeFileSync(rolesPath, yaml.dump(raw))
+    // 読み込みと同じ JSON_SCHEMA で書き戻す（危険タグの混入防止）
+    fs.writeFileSync(rolesPath, yaml.dump(raw, { schema: yaml.JSON_SCHEMA }))
     console.log(`✅ Role "${name}" added (${opts.ai} / ${opts.model})`)
   })
 
@@ -185,7 +186,7 @@ program.command('doctor').action(async () => {
   const isListening = await new Promise<boolean>(resolve => {
     const sock = net.createConnection(port, host)
     sock.on('connect', () => { sock.destroy(); resolve(true) })
-    sock.on('error', () => resolve(false))
+    sock.on('error', () => { sock.destroy(); resolve(false) })
   })
   if (isListening) {
     console.log(`✅ MCP server           listening on :${port}`)
