@@ -15,8 +15,8 @@ describe('resolveApiKey', () => {
     expect(resolveApiKey('')).toBe('')
   })
 
-  it('warns but returns value for literal secrets', () => {
-    expect(resolveApiKey('sk-literal')).toBe('sk-literal')
+  it('throws CONFIG_ERROR for literal secrets', () => {
+    expect(() => resolveApiKey('sk-literal')).toThrow('CONFIG_ERROR')
   })
 
   it('role-specific env takes priority', () => {

@@ -1,18 +1,33 @@
-import time
+from __future__ import annotations
+
 import os
 import sys
-sys.path.insert(0, 'adapters')
-from base_adapter import BaseAdapter, AdapterRequest, make_success_response, make_error_response
+import time
+from typing import Any
+
+# adapterファイルの絶対パスを基準にsys.pathを設定（CWD非依存）
+_ADAPTERS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _ADAPTERS_DIR not in sys.path:
+    sys.path.insert(0, _ADAPTERS_DIR)
+
 import requests
+from base_adapter import BaseAdapter, AdapterRequest, make_success_response, make_error_response
 
 XAI_API_URL = "https://api.x.ai/v1/chat/completions"
 
+
 class GrokAdapter(BaseAdapter):
-    def call(self, req: AdapterRequest):
+    def call(self, req: AdapterRequest) -> dict[str, Any]:
         start = time.monotonic()
+        # APIキー未設定を早期リターンで明示（空文字をBearerトークンとして送らない）
+        api_key = os.environ.get("XAI_API_KEY")
+        if not api_key:
+            return make_error_response(
+                req.request_id, req.role, req.model,
+                "AUTH_FAILED", "XAI_API_KEY is not set", 0,
+            )
         try:
-            api_key = os.environ.get("XAI_API_KEY", "")
-            messages = []
+            messages: list[dict[str, str]] = []
             if req.system_prompt:
                 messages.append({"role": "system", "content": req.system_prompt})
             messages.append({"role": "user", "content": req.prompt})
@@ -39,12 +54,13 @@ class GrokAdapter(BaseAdapter):
         except requests.Timeout:
             elapsed = int((time.monotonic() - start) * 1000)
             return make_error_response(req.request_id, req.role, req.model, "ROLE_TIMEOUT", "Request timed out", elapsed)
-        except requests.ConnectionError as e:
+        except requests.ConnectionError:
             elapsed = int((time.monotonic() - start) * 1000)
-            return make_error_response(req.request_id, req.role, req.model, "NETWORK_ERROR", str(e), elapsed)
+            return make_error_response(req.request_id, req.role, req.model, "NETWORK_ERROR", "Connection failed", elapsed)
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
             return make_error_response(req.request_id, req.role, req.model, "MODEL_ERROR", str(e), elapsed)
+
 
 if __name__ == "__main__":
     GrokAdapter().run_from_stdin()

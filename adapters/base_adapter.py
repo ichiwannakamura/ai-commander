@@ -1,11 +1,34 @@
 from __future__ import annotations
+
 import json
+import os
 import sys
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+# adapterファイルの絶対パスを基準にsys.pathを設定（CWD非依存）
+_ADAPTERS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _ADAPTERS_DIR not in sys.path:
+    sys.path.insert(0, _ADAPTERS_DIR)
+
 RETRIABLE_CODES = {"ROLE_TIMEOUT", "RATE_LIMIT", "MODEL_ERROR", "NETWORK_ERROR"}
+
+# エラーメッセージに含まれうる機密情報をサニタイズ
+_SENSITIVE_PATTERNS = ("key", "token", "secret", "password", "auth", "bearer")
+
+
+def _sanitize_message(msg: str) -> str:
+    """エラーメッセージから機密情報を含む可能性のある長い文字列を除去する。"""
+    lower = msg.lower()
+    for pattern in _SENSITIVE_PATTERNS:
+        if pattern in lower:
+            return "Authentication or credential error (details hidden)"
+    # URL を含む場合は接続先ホストのみに切り詰め
+    if "http" in lower or "://" in lower:
+        return "Connection error (URL details hidden)"
+    return msg[:300] if len(msg) > 300 else msg
 
 
 @dataclass
@@ -33,8 +56,12 @@ class AdapterRequest:
 
 
 def make_error_response(
-    request_id: str, role: str, model: str,
-    code: str, message: str, latency_ms: int,
+    request_id: str,
+    role: str,
+    model: str,
+    code: str,
+    message: str,
+    latency_ms: int,
     retry_after_ms: int | None = None,
 ) -> dict[str, Any]:
     return {
@@ -48,7 +75,7 @@ def make_error_response(
         "status": "error",
         "error": {
             "code": code,
-            "message": message,
+            "message": _sanitize_message(message),
             "retriable": code in RETRIABLE_CODES,
             "retry_after_ms": retry_after_ms,
         },
@@ -56,8 +83,13 @@ def make_error_response(
 
 
 def make_success_response(
-    request_id: str, role: str, model: str,
-    content: str, input_tokens: int, output_tokens: int, latency_ms: int,
+    request_id: str,
+    role: str,
+    model: str,
+    content: str,
+    input_tokens: int,
+    output_tokens: int,
+    latency_ms: int,
 ) -> dict[str, Any]:
     return {
         "version": "1",
@@ -71,21 +103,26 @@ def make_success_response(
     }
 
 
-class BaseAdapter:
-    """全アダプターの基底クラス。run_from_stdin() でstdin JSON → stdout JSON"""
+class BaseAdapter(ABC):
+    """全アダプターの基底クラス。run_from_stdin() で stdin JSON → stdout JSON。"""
 
+    @abstractmethod
     def call(self, req: AdapterRequest) -> dict[str, Any]:
-        raise NotImplementedError
+        """AIを呼び出し、make_success_response / make_error_response の結果を返す。"""
 
     def run_from_stdin(self) -> None:
         raw = sys.stdin.read()
         start = time.monotonic()
+        request_id = "unknown"
+        role = "unknown"
+        model = "unknown"
         try:
             req = AdapterRequest.from_json(raw)
+            request_id, role, model = req.request_id, req.role, req.model
             result = self.call(req)
         except json.JSONDecodeError as e:
-            result = make_error_response("unknown", "unknown", "unknown", "INVALID_PROMPT", str(e), 0)
+            result = make_error_response(request_id, role, model, "INVALID_PROMPT", str(e), 0)
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
-            result = make_error_response("unknown", "unknown", "unknown", "ADAPTER_CRASH", str(e), elapsed)
+            result = make_error_response(request_id, role, model, "ADAPTER_CRASH", str(e), elapsed)
         print(json.dumps(result), flush=True)

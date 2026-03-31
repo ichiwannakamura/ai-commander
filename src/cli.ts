@@ -1,6 +1,8 @@
 import { Command } from 'commander'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import yaml from 'js-yaml'
+import fs from 'fs'
 import { loadConfig } from './config-loader.js'
 import { resolveRoles, autoDetectRole } from './orchestrator.js'
 import { dispatch, buildEnvelope } from './dispatcher.js'
@@ -9,6 +11,16 @@ import { formatMarkdown, formatJson } from './aggregator.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = path.resolve(__dirname, '..')
 const ADAPTER_DIR = path.join(ROOT_DIR, 'adapters')
+
+/** タイムアウト秒数を検証して秒→msに変換 */
+function parseTimeoutSeconds(value: string, name: string): number {
+  const n = parseInt(value, 10)
+  if (isNaN(n) || n < 1 || n > 300) {
+    console.error(`error: --${name} must be between 1 and 300 seconds (got: ${value})`)
+    process.exit(1)
+  }
+  return n * 1000
+}
 
 const program = new Command()
 program.name('ai-cmd').description('Multi-AI orchestrator CLI').version('0.1.0')
@@ -29,6 +41,9 @@ program
     }
     if (!prompt) { program.help(); return }
 
+    const globalTimeoutMs = parseTimeoutSeconds(opts.timeout, 'timeout')
+    const roleTimeoutMs = parseTimeoutSeconds(opts.roleTimeout, 'role-timeout')
+
     const config = loadConfig(ROOT_DIR)
     const roleNames = opts.role
       ? opts.role.split(',').map((r: string) => r.trim())
@@ -36,14 +51,12 @@ program
     const resolvedRoles = resolveRoles(roleNames, config)
 
     if (opts.dryRun) {
-      const globalTimeout = parseInt(opts.timeout) * 1000
-      const roleTimeout = parseInt(opts.roleTimeout) * 1000
       for (const role of resolvedRoles) {
         console.log(`role: ${role.roleName}`)
         console.log(`  adapter: adapters/${role.ai}_adapter.py`)
         console.log(`  model: ${role.model}`)
         console.log(`  system_prompt: "${role.system.slice(0, 60)}..."`)
-        console.log(`  timeout: ${roleTimeout / 1000}s (role) / ${globalTimeout / 1000}s (global)`)
+        console.log(`  timeout: ${roleTimeoutMs / 1000}s (role) / ${globalTimeoutMs / 1000}s (global)`)
         console.log(`  retries: ${config.timeouts.retries}`)
       }
       console.log('→ dry-run: no request sent')
@@ -55,8 +68,8 @@ program
       prompt,
       roles: resolvedRoles,
       apiKeys: config.api_keys,
-      roleTimeoutMs: parseInt(opts.roleTimeout) * 1000,
-      globalTimeoutMs: parseInt(opts.timeout) * 1000,
+      roleTimeoutMs,
+      globalTimeoutMs,
       retries: config.timeouts.retries,
     })
     const envelope = buildEnvelope(results[0]?.request_id ?? 'unknown', results)
@@ -86,6 +99,29 @@ roles.command('show <role>').action((roleName: string) => {
   console.log(JSON.stringify({ name: roleName, ...role }, null, 2))
 })
 
+roles
+  .command('add <name>')
+  .description('Add a new role to roles.yaml')
+  .requiredOption('--ai <provider>', 'AI provider (claude|openai|gemini|grok|ollama)')
+  .requiredOption('--model <model>', 'Model name (e.g. claude-sonnet-4-6)')
+  .option('--system <prompt>', 'System prompt for this role')
+  .action((name: string, opts) => {
+    const VALID_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'ollama']
+    if (!VALID_PROVIDERS.includes(opts.ai)) {
+      console.error(`error: --ai must be one of: ${VALID_PROVIDERS.join(', ')}`)
+      process.exit(1)
+    }
+    const rolesPath = path.join(ROOT_DIR, 'roles.yaml')
+    const raw = yaml.load(fs.readFileSync(rolesPath, 'utf8'), { schema: yaml.JSON_SCHEMA }) as { roles: Record<string, unknown> }
+    if (name in raw.roles) {
+      console.error(`error: role "${name}" already exists. Use a different name.`)
+      process.exit(1)
+    }
+    raw.roles[name] = { ai: opts.ai, model: opts.model, ...(opts.system ? { system: opts.system } : {}) }
+    fs.writeFileSync(rolesPath, yaml.dump(raw))
+    console.log(`✅ Role "${name}" added (${opts.ai} / ${opts.model})`)
+  })
+
 roles.command('validate <role>').action(async (roleName: string) => {
   const config = loadConfig(ROOT_DIR)
   const role = config.roles[roleName]
@@ -93,9 +129,11 @@ roles.command('validate <role>').action(async (roleName: string) => {
 
   const ai = role.ai
   const apiKey = config.api_keys[ai]
+  const sep = '─'.repeat(45)
+  console.log(sep)
 
   // [1/3] APIキー存在確認
-  if (!apiKey) {
+  if (!apiKey && ai !== 'ollama') {
     console.log(`[1/3] APIキー存在確認     ❌ No key for provider "${ai}"`)
     process.exit(1)
   }
@@ -111,16 +149,17 @@ roles.command('validate <role>').action(async (roleName: string) => {
   if (result.status === 'success' && result.content && result.tokens) {
     console.log(`[2/3] エンドポイント疎通  ✅ HTTP 200 reachable (${result.latency_ms}ms)`)
     console.log(`[3/3] 最小トークン疎通    ✅ response non-empty + usage present (${result.tokens.input + result.tokens.output} tokens)`)
+    console.log(sep)
     console.log(`✅ role "${roleName}" is valid`)
   } else {
     console.log(`[2/3] エンドポイント疎通  ❌ ${result.error?.code}: ${result.error?.message}`)
+    console.log(sep)
     process.exit(1)
   }
 })
 
 // === doctor コマンド ===
 program.command('doctor').action(async () => {
-  const fs = await import('fs')
   const net = await import('net')
   const config = loadConfig(ROOT_DIR)
   const sep = '─'.repeat(45)
