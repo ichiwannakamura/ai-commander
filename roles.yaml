@@ -1,0 +1,21 @@
+roles:
+  coder:
+    ai: claude
+    model: claude-sonnet-4-6
+    system: "You are an expert software engineer. Write clean, production-ready code."
+  reviewer:
+    ai: openai
+    model: gpt-4o
+    system: "You are a senior code reviewer. Be concise and actionable."
+  monitor:
+    ai: ollama
+    model: qwen3:8b
+    system: "You are a system monitoring analyst."
+  researcher:
+    ai: grok
+    model: grok-3
+    system: "You are a research assistant with access to current information."
+  planner:
+    ai: claude
+    model: claude-opus-4-6
+    system: "You are a software architect. Think deeply before answering."

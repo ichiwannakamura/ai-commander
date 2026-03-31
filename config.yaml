@@ -1,0 +1,13 @@
+api_keys:
+  claude: ${ANTHROPIC_API_KEY}
+  openai: ${OPENAI_API_KEY}
+  gemini: ${GEMINI_API_KEY}
+  grok: ${XAI_API_KEY}
+  ollama: ""
+timeouts:
+  global_timeout_s: 30
+  role_timeout_s: 10
+  retries: 2
+mcp:
+  port: 3000
+  host: "127.0.0.1"

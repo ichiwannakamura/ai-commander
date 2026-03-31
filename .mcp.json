@@ -1,0 +1,8 @@
+{
+	"mcpServers": {
+		"ai-commander": {
+			"command": "node",
+			"args": ["c:/dev/Proj/ai-commander/dist/index.js"]
+		}
+	}
+}
