@@ -75,9 +75,15 @@ program
       exitWithError(e, 'Run "ai-cmd doctor" to diagnose configuration issues.')
     }
 
-    const roleNames = opts.role
+    // ロール名は英数字・ハイフン・アンダースコアのみ許可（Prototype Pollution / パス混入防止）
+    const ROLE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/
+    const rawRoleNames = opts.role
       ? opts.role.split(',').map((r: string) => r.trim())
       : [autoDetectRole(prompt, config)]
+    for (const name of rawRoleNames) {
+      if (!ROLE_NAME_RE.test(name)) exitWithError(`Invalid role name "${name}" — must match ${ROLE_NAME_RE}`)
+    }
+    const roleNames = rawRoleNames
 
     let resolvedRoles
     try {
@@ -150,8 +156,11 @@ roles
   .description('Add a new role to roles.yaml')
   .requiredOption('--ai <provider>', 'AI provider (claude|openai|gemini|grok|ollama)')
   .requiredOption('--model <model>', 'Model name (e.g. claude-sonnet-4-6)')
-  .option('--system <prompt>', 'System prompt for this role')
+  .option('--system <prompt>', 'System prompt for this role (max 10,000 chars)')
   .action((name: string, opts) => {
+    if (opts.system && opts.system.length > 10_000) {
+      exitWithError('--system prompt exceeds 10,000 character limit')
+    }
     const VALID_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'ollama']
     if (!VALID_PROVIDERS.includes(opts.ai)) {
       exitWithError(`--ai must be one of: ${VALID_PROVIDERS.join(', ')}`)

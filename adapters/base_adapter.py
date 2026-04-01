@@ -47,12 +47,19 @@ class AdapterRequest:
     @classmethod
     def from_json(cls, raw: str) -> "AdapterRequest":
         data = json.loads(raw)
+        # 必須フィールド欠落は KeyError → INVALID_PROMPT として上位で処理
+        prompt = data["prompt"]
+        model = data["model"]
+        if len(prompt) > 100_000:
+            raise ValueError("prompt exceeds 100,000 character limit")
+        if len(model) > 200:
+            raise ValueError("model name exceeds 200 character limit")
         return cls(
             version=data["version"],
             request_id=data["request_id"],
             role=data["role"],
-            model=data["model"],
-            prompt=data["prompt"],
+            model=model,
+            prompt=prompt,
             system_prompt=data.get("system_prompt", ""),
             timeout_ms=data.get("timeout_ms", 10000),
         )
@@ -123,9 +130,9 @@ class BaseAdapter(ABC):
             req = AdapterRequest.from_json(raw)
             request_id, role, model = req.request_id, req.role, req.model
             result = self.call(req)
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            # 不正な入力 JSON または必須フィールド欠落
-            result = make_error_response(request_id, role, model, "INVALID_PROMPT", str(e), 0)
+        except (json.JSONDecodeError, KeyError, ValueError):
+            # 内部例外メッセージをそのまま返すとスキーマ構造が露出するため固定メッセージを使用
+            result = make_error_response(request_id, role, model, "INVALID_PROMPT", "Invalid or malformed request", 0)
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
             result = make_error_response(request_id, role, model, "ADAPTER_CRASH", str(e), elapsed)

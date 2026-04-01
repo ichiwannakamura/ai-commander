@@ -14,7 +14,16 @@ import requests
 from base_adapter import BaseAdapter, AdapterRequest, make_success_response, make_error_response
 
 # Docker/WSL環境では OLLAMA_API_URL=http://host.docker.internal:11434/api/chat で上書き可能
-OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://127.0.0.1:11434/api/chat")
+# SSRF対策: ローカルホスト・Docker内部ホスト以外への向け替えを禁止
+_OLLAMA_URL_DEFAULT = "http://127.0.0.1:11434/api/chat"
+_OLLAMA_URL_ALLOWLIST = ("http://127.0.0.1:", "http://localhost:", "http://host.docker.internal:")
+_ollama_url_raw = os.environ.get("OLLAMA_API_URL", _OLLAMA_URL_DEFAULT)
+if not any(_ollama_url_raw.startswith(prefix) for prefix in _OLLAMA_URL_ALLOWLIST):
+    # 許可されていないURLはデフォルトにフォールバック（起動を止めない）
+    import sys as _sys
+    print(f"WARNING: OLLAMA_API_URL '{_ollama_url_raw}' is not in allowlist, using default", file=_sys.stderr)
+    _ollama_url_raw = _OLLAMA_URL_DEFAULT
+OLLAMA_API_URL = _ollama_url_raw
 
 
 class OllamaAdapter(BaseAdapter):

@@ -1,11 +1,30 @@
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import path from 'path'
+import { z } from 'zod'
 import type {
   AdapterRequest, AdapterResponse, EnvelopeResponse,
   OverallStatus,
 } from './types.js'
 import { PROTOCOL_VERSION } from './types.js'
+
+// Python アダプターからの応答をランタイムで検証するスキーマ（型キャストだけに頼らない）
+const AdapterResponseSchema = z.object({
+  version: z.string(),
+  request_id: z.string(),
+  role: z.string(),
+  model: z.string(),
+  content: z.string().nullable(),
+  tokens: z.object({ input: z.number(), output: z.number() }).nullable(),
+  latency_ms: z.number(),
+  status: z.enum(['success', 'error']),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    retriable: z.boolean(),
+    retry_after_ms: z.number().nullable(),
+  }).optional(),
+})
 
 const ADAPTER_MAP: Record<string, string> = {
   claude: 'claude_adapter.py',
@@ -170,7 +189,8 @@ async function callAdapter(
       clearTimeout(timer)
       const elapsed = Date.now() - startMs
       try {
-        resolve(JSON.parse(stdout.trim()) as AdapterResponse)
+        const parsed = AdapterResponseSchema.parse(JSON.parse(stdout.trim()))
+        resolve(parsed as AdapterResponse)
       } catch {
         resolve({
           version: PROTOCOL_VERSION,

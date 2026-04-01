@@ -14,10 +14,11 @@ export async function startMcpServer(config: AppConfig, adapterDir: string): Pro
 
   // 各ロールをMCPツールとして登録（起動時の config スナップショットに基づく静的登録）
   // roles.yaml を変更した場合はサーバーを再起動すること（`ai-cmd serve`）
+  // NOTE: HTTP トランスポートへ移行する際は Bearer トークン等の認証を必ず追加すること
   for (const [roleName, role] of Object.entries(config.roles)) {
     server.tool(
       roleName,
-      { prompt: z.string().describe('The prompt to send to this AI role') },
+      { prompt: z.string().min(1).max(100_000).describe('The prompt to send to this AI role') },
       async ({ prompt }) => {
         const resolvedRoles = resolveRoles([roleName], config)
         const results = await dispatch({
@@ -38,7 +39,7 @@ export async function startMcpServer(config: AppConfig, adapterDir: string): Pro
   // 自動ルーティングツール
   server.tool(
     'auto',
-    { prompt: z.string().describe('The prompt — role is auto-detected from content') },
+    { prompt: z.string().min(1).max(100_000).describe('The prompt — role is auto-detected from content') },
     async ({ prompt }) => {
       const roleName = autoDetectRole(prompt, config)
       const resolvedRoles = resolveRoles([roleName], config)
