@@ -11,7 +11,7 @@ if _ADAPTERS_DIR not in sys.path:
     sys.path.insert(0, _ADAPTERS_DIR)
 
 import anthropic
-from base_adapter import BaseAdapter, AdapterRequest, make_success_response, make_error_response
+from base_adapter import BaseAdapter, AdapterRequest, DEFAULT_MAX_TOKENS, make_success_response, make_error_response
 
 
 class ClaudeAdapter(BaseAdapter):
@@ -25,7 +25,7 @@ class ClaudeAdapter(BaseAdapter):
             messages = [{"role": "user", "content": req.prompt}]
             response = self._client.messages.create(
                 model=req.model,
-                max_tokens=4096,
+                max_tokens=DEFAULT_MAX_TOKENS,
                 system=req.system_prompt or anthropic.NOT_GIVEN,
                 messages=messages,
             )

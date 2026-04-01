@@ -107,6 +107,8 @@ async function callAdapter(
     let stderr = ''
     // タイマー発火と close イベントの二重 resolve を防ぐフラグ
     let settled = false
+    // 出力バッファ上限（アダプターが異常に大量出力した場合のメモリリーク対策）
+    const MAX_BUFFER = 1024 * 1024 // 1MB
 
     const timer = setTimeout(() => {
       if (settled) return
@@ -145,8 +147,23 @@ async function callAdapter(
 
     proc.stdin.write(JSON.stringify(req))
     proc.stdin.end()
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
-    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+    proc.stdout.on('data', (d: Buffer) => {
+      stdout += d.toString()
+      if (stdout.length > MAX_BUFFER && !settled) {
+        settled = true
+        clearTimeout(timer)
+        proc.kill('SIGKILL')
+        resolve({
+          version: PROTOCOL_VERSION, request_id: req.request_id, role: req.role, model: req.model,
+          content: null, tokens: null, latency_ms: Date.now() - startMs, status: 'error',
+          error: { code: 'ADAPTER_CRASH', message: 'Adapter stdout exceeded 1MB limit', retriable: false, retry_after_ms: null },
+        })
+      }
+    })
+    proc.stderr.on('data', (d: Buffer) => {
+      stderr += d.toString()
+      if (stderr.length > MAX_BUFFER) stderr = stderr.slice(-MAX_BUFFER) // 末尾1MBを保持
+    })
     proc.on('close', () => {
       if (settled) return
       settled = true

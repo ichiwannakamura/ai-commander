@@ -15,6 +15,9 @@ if _ADAPTERS_DIR not in sys.path:
 
 RETRIABLE_CODES = {"ROLE_TIMEOUT", "RATE_LIMIT", "MODEL_ERROR", "NETWORK_ERROR"}
 
+# 全アダプター共通のデフォルト最大トークン数（変更時はここだけ修正）
+DEFAULT_MAX_TOKENS = 4096
+
 # エラーメッセージに含まれうる機密情報をサニタイズ
 _SENSITIVE_PATTERNS = ("key", "token", "secret", "password", "auth", "bearer")
 
@@ -120,7 +123,8 @@ class BaseAdapter(ABC):
             req = AdapterRequest.from_json(raw)
             request_id, role, model = req.request_id, req.role, req.model
             result = self.call(req)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            # 不正な入力 JSON または必須フィールド欠落
             result = make_error_response(request_id, role, model, "INVALID_PROMPT", str(e), 0)
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)

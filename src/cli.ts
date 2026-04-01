@@ -12,6 +12,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = path.resolve(__dirname, '..')
 const ADAPTER_DIR = path.join(ROOT_DIR, 'adapters')
 
+// provider → 必要な環境変数名
+const PROVIDER_ENV_KEYS: Record<string, string> = {
+  claude: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  grok: 'XAI_API_KEY',
+  ollama: '(不要)',
+}
+
 /** タイムアウト秒数を検証して秒→msに変換 */
 function parseTimeoutSeconds(value: string, name: string): number {
   const n = parseInt(value, 10)
@@ -22,46 +31,77 @@ function parseTimeoutSeconds(value: string, name: string): number {
   return n * 1000
 }
 
+/** エラーをユーザー向けメッセージで終了 */
+function exitWithError(msg: unknown, hint?: string): never {
+  const text = msg instanceof Error ? msg.message : String(msg)
+  console.error(`error: ${text}`)
+  if (hint) console.error(`hint:  ${hint}`)
+  process.exit(1)
+}
+
 const program = new Command()
-program.name('ai-cmd').description('Multi-AI orchestrator CLI').version('0.1.0')
+program
+  .name('ai-cmd')
+  .description('Route prompts to multiple AI providers (Claude, OpenAI, Gemini, Grok, Ollama)')
+  .version('0.1.0')
+  .addHelpText('after', `
+Examples:
+  $ ai-cmd "このコードをレビューして"
+  $ ai-cmd --role coder,reviewer "バグを修正して"
+  $ ai-cmd --dry-run --role planner "DBスキーマを設計して"
+  $ ai-cmd --json "summarize this" | jq .overall_status
+  $ ai-cmd roles list
+  $ ai-cmd doctor
+  `)
 
 // === メイン実行コマンド ===
 program
   .argument('[prompt]', 'Prompt to send')
   .option('--role <roles>', 'Comma-separated role names (e.g. coder,reviewer)')
   .option('--timeout <seconds>', 'Global timeout in seconds', '30')
-  .option('--role-timeout <seconds>', 'Per-role timeout in seconds', '10')
+  .option('--role-timeout <seconds>', 'Per-role timeout in seconds', '20')
   .option('--json', 'Output as JSON envelope')
-  .option('--stream', 'Stream output (mutually exclusive with --json)')
   .option('--dry-run', 'Show routing plan without executing')
   .action(async (prompt: string | undefined, opts) => {
-    if (opts.json && opts.stream) {
-      console.error('error: --stream and --json are mutually exclusive')
-      process.exit(1)
-    }
     if (!prompt) { program.help(); return }
 
     const globalTimeoutMs = parseTimeoutSeconds(opts.timeout, 'timeout')
     const roleTimeoutMs = parseTimeoutSeconds(opts.roleTimeout, 'role-timeout')
 
-    const config = loadConfig(ROOT_DIR)
+    let config
+    try {
+      config = loadConfig(ROOT_DIR)
+    } catch (e) {
+      exitWithError(e, 'Run "ai-cmd doctor" to diagnose configuration issues.')
+    }
+
     const roleNames = opts.role
       ? opts.role.split(',').map((r: string) => r.trim())
       : [autoDetectRole(prompt, config)]
-    const resolvedRoles = resolveRoles(roleNames, config)
+
+    let resolvedRoles
+    try {
+      resolvedRoles = resolveRoles(roleNames, config)
+    } catch (e) {
+      exitWithError(e, 'Run "ai-cmd roles list" to see available roles.')
+    }
 
     if (opts.dryRun) {
       for (const role of resolvedRoles) {
-        console.log(`role: ${role.roleName}`)
+        console.log(`role: ${role.roleName}  (auto-detected from prompt keywords)`)
         console.log(`  adapter: adapters/${role.ai}_adapter.py`)
         console.log(`  model: ${role.model}`)
-        console.log(`  system_prompt: "${role.system.slice(0, 60)}..."`)
+        if (role.system) console.log(`  system_prompt: "${role.system.slice(0, 60)}..."`)
         console.log(`  timeout: ${roleTimeoutMs / 1000}s (role) / ${globalTimeoutMs / 1000}s (global)`)
         console.log(`  retries: ${config.timeouts.retries}`)
       }
-      console.log('→ dry-run: no request sent')
+      console.log('\n→ dry-run: no request sent')
       return
     }
+
+    // 処理中フィードバック（--json モードでも stderr に出力するのでパイプを汚さない）
+    const roleLabel = resolvedRoles.map(r => r.roleName).join(', ')
+    process.stderr.write(`Sending to [${roleLabel}]...\n`)
 
     const results = await dispatch({
       adapterDir: ADAPTER_DIR,
@@ -86,16 +126,22 @@ program
 const roles = program.command('roles')
 
 roles.command('list').action(() => {
-  const config = loadConfig(ROOT_DIR)
+  let config
+  try { config = loadConfig(ROOT_DIR) } catch (e) { exitWithError(e) }
+  console.log(`  ${'NAME'.padEnd(15)} ${'PROVIDER'.padEnd(10)} MODEL`)
+  console.log(`  ${'-'.repeat(13)} ${'-'.repeat(8)} ${'-'.repeat(25)}`)
   for (const [name, role] of Object.entries(config.roles)) {
-    console.log(`  ${name.padEnd(15)} ${role.ai.padEnd(10)} ${role.model}`)
+    const hasKey = !!config.api_keys[role.ai] || role.ai === 'ollama'
+    const status = hasKey ? '[OK]' : '[no key]'
+    console.log(`  ${name.padEnd(15)} ${role.ai.padEnd(10)} ${role.model.padEnd(25)} ${status}`)
   }
 })
 
 roles.command('show <role>').action((roleName: string) => {
-  const config = loadConfig(ROOT_DIR)
+  let config
+  try { config = loadConfig(ROOT_DIR) } catch (e) { exitWithError(e) }
   const role = config.roles[roleName]
-  if (!role) { console.error(`Role "${roleName}" not found`); process.exit(1) }
+  if (!role) exitWithError(`Role "${roleName}" not found`, 'Run "ai-cmd roles list" to see available roles.')
   console.log(JSON.stringify({ name: roleName, ...role }, null, 2))
 })
 
@@ -108,37 +154,38 @@ roles
   .action((name: string, opts) => {
     const VALID_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'ollama']
     if (!VALID_PROVIDERS.includes(opts.ai)) {
-      console.error(`error: --ai must be one of: ${VALID_PROVIDERS.join(', ')}`)
-      process.exit(1)
+      exitWithError(`--ai must be one of: ${VALID_PROVIDERS.join(', ')}`)
     }
     const rolesPath = path.join(ROOT_DIR, 'roles.yaml')
     const raw = yaml.load(fs.readFileSync(rolesPath, 'utf8'), { schema: yaml.JSON_SCHEMA }) as { roles: Record<string, unknown> }
     if (name in raw.roles) {
-      console.error(`error: role "${name}" already exists. Use a different name.`)
-      process.exit(1)
+      exitWithError(`Role "${name}" already exists. Use a different name.`)
     }
     raw.roles[name] = { ai: opts.ai, model: opts.model, ...(opts.system ? { system: opts.system } : {}) }
     // 読み込みと同じ JSON_SCHEMA で書き戻す（危険タグの混入防止）
     fs.writeFileSync(rolesPath, yaml.dump(raw, { schema: yaml.JSON_SCHEMA }))
-    console.log(`✅ Role "${name}" added (${opts.ai} / ${opts.model})`)
+    console.log(`Role "${name}" added (${opts.ai} / ${opts.model})`)
   })
 
 roles.command('validate <role>').action(async (roleName: string) => {
-  const config = loadConfig(ROOT_DIR)
+  let config
+  try { config = loadConfig(ROOT_DIR) } catch (e) { exitWithError(e) }
   const role = config.roles[roleName]
-  if (!role) { console.error(`CONFIG_ERROR: role "${roleName}" not found`); process.exit(1) }
+  if (!role) exitWithError(`Role "${roleName}" not found`, 'Run "ai-cmd roles list" to see available roles.')
 
   const ai = role.ai
   const apiKey = config.api_keys[ai]
-  const sep = '─'.repeat(45)
+  const sep = '-'.repeat(45)
   console.log(sep)
 
   // [1/3] APIキー存在確認
   if (!apiKey && ai !== 'ollama') {
-    console.log(`[1/3] APIキー存在確認     ❌ No key for provider "${ai}"`)
+    const envKey = PROVIDER_ENV_KEYS[ai] ?? `${ai.toUpperCase()}_API_KEY`
+    console.log(`[1/3] API key check       FAIL  No key for provider "${ai}"`)
+    console.log(`      Fix: export ${envKey}="your-key-here"`)
     process.exit(1)
   }
-  console.log(`[1/3] APIキー存在確認     ✅ key found (non-empty)`)
+  console.log(`[1/3] API key check       OK    key found`)
 
   // [2/3] + [3/3]: 最小トークン疎通
   const results = await dispatch({
@@ -148,12 +195,12 @@ roles.command('validate <role>').action(async (roleName: string) => {
   })
   const result = results[0]
   if (result.status === 'success' && result.content && result.tokens) {
-    console.log(`[2/3] エンドポイント疎通  ✅ HTTP 200 reachable (${result.latency_ms}ms)`)
-    console.log(`[3/3] 最小トークン疎通    ✅ response non-empty + usage present (${result.tokens.input + result.tokens.output} tokens)`)
+    console.log(`[2/3] Endpoint reachable  OK    HTTP 200 (${result.latency_ms}ms)`)
+    console.log(`[3/3] Token round-trip    OK    ${result.tokens.input + result.tokens.output} tokens`)
     console.log(sep)
-    console.log(`✅ role "${roleName}" is valid`)
+    console.log(`Role "${roleName}" is valid`)
   } else {
-    console.log(`[2/3] エンドポイント疎通  ❌ ${result.error?.code}: ${result.error?.message}`)
+    console.log(`[2/3] Endpoint reachable  FAIL  ${result.error?.code}: ${result.error?.message}`)
     console.log(sep)
     process.exit(1)
   }
@@ -162,12 +209,13 @@ roles.command('validate <role>').action(async (roleName: string) => {
 // === doctor コマンド ===
 program.command('doctor').action(async () => {
   const net = await import('net')
-  const config = loadConfig(ROOT_DIR)
-  const sep = '─'.repeat(45)
+  let config
+  try { config = loadConfig(ROOT_DIR) } catch (e) { exitWithError(e) }
+  const sep = '-'.repeat(45)
 
   console.log(sep)
-  console.log(`✅ config.yaml          found`)
-  console.log(`✅ roles.yaml           ${Object.keys(config.roles).length} roles`)
+  console.log(`OK  config.yaml          found`)
+  console.log(`OK  roles.yaml           ${Object.keys(config.roles).length} roles`)
   console.log(sep)
 
   for (const [ai, adapterFile] of Object.entries({
@@ -176,9 +224,16 @@ program.command('doctor').action(async () => {
   })) {
     const exists = fs.existsSync(path.join(ADAPTER_DIR, adapterFile))
     const apiKey = config.api_keys[ai]
-    if (!exists) { console.log(`❌ ${adapterFile.padEnd(25)} file not found`); continue }
-    if (!apiKey && ai !== 'ollama') { console.log(`⚠️  ${adapterFile.padEnd(25)} no API key`); continue }
-    console.log(`✅ ${adapterFile.padEnd(25)} OK`)
+    const envKey = PROVIDER_ENV_KEYS[ai] ?? `${ai.toUpperCase()}_API_KEY`
+    if (!exists) {
+      console.log(`NG  ${adapterFile.padEnd(25)} file not found`)
+      continue
+    }
+    if (!apiKey && ai !== 'ollama') {
+      console.log(`!!  ${adapterFile.padEnd(25)} no API key  → Fix: export ${envKey}="your-key"`)
+      continue
+    }
+    console.log(`OK  ${adapterFile.padEnd(25)} ready`)
   }
 
   console.log(sep)
@@ -189,17 +244,18 @@ program.command('doctor').action(async () => {
     sock.on('error', () => { sock.destroy(); resolve(false) })
   })
   if (isListening) {
-    console.log(`✅ MCP server           listening on :${port}`)
+    console.log(`OK  MCP server           listening on :${port}`)
   } else {
-    console.log(`🔴 MCP server           not running`)
-    console.log(`                        → 起動: ai-cmd serve`)
+    console.log(`--  MCP server           not running  → Start: ai-cmd serve`)
   }
 })
 
 // === serve コマンド ===
 program.command('serve').action(async () => {
   const { startMcpServer } = await import('./mcp-server.js')
-  const config = loadConfig(ROOT_DIR)
+  let config
+  try { config = loadConfig(ROOT_DIR) } catch (e) { exitWithError(e) }
+  console.error(`Starting ai-commander MCP server...`)
   await startMcpServer(config, ADAPTER_DIR)
 })
 

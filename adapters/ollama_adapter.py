@@ -13,7 +13,8 @@ if _ADAPTERS_DIR not in sys.path:
 import requests
 from base_adapter import BaseAdapter, AdapterRequest, make_success_response, make_error_response
 
-OLLAMA_API_URL = "http://127.0.0.1:11434/api/chat"
+# Docker/WSL環境では OLLAMA_API_URL=http://host.docker.internal:11434/api/chat で上書き可能
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://127.0.0.1:11434/api/chat")
 
 
 class OllamaAdapter(BaseAdapter):

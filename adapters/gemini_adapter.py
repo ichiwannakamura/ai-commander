@@ -16,13 +16,23 @@ from base_adapter import BaseAdapter, AdapterRequest, make_success_response, mak
 
 
 class GeminiAdapter(BaseAdapter):
+    """Google Gemini API アダプター。環境変数 GEMINI_API_KEY が必要。"""
+
     def __init__(self) -> None:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
         # configure はインスタンス生成時に1回だけ呼ぶ（グローバル状態競合を防止）
-        genai.configure(api_key=api_key)
+        # 空キーでもここでは configure しない。call() 冒頭でチェックする。
+        pass
 
     def call(self, req: AdapterRequest) -> dict[str, Any]:
         start = time.monotonic()
+        # 空キーでグローバル状態を汚染しないよう call() 冒頭でチェック（GrokAdapter と統一）
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return make_error_response(
+                req.request_id, req.role, req.model,
+                "AUTH_FAILED", "GEMINI_API_KEY is not set", 0,
+            )
+        genai.configure(api_key=api_key)
         try:
             model = genai.GenerativeModel(
                 model_name=req.model,

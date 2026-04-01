@@ -11,12 +11,18 @@ if _ADAPTERS_DIR not in sys.path:
     sys.path.insert(0, _ADAPTERS_DIR)
 
 import requests
-from base_adapter import BaseAdapter, AdapterRequest, make_success_response, make_error_response
+from base_adapter import BaseAdapter, AdapterRequest, DEFAULT_MAX_TOKENS, make_success_response, make_error_response
 
 XAI_API_URL = "https://api.x.ai/v1/chat/completions"
 
 
 class GrokAdapter(BaseAdapter):
+    """xAI Grok API アダプター。環境変数 XAI_API_KEY が必要。"""
+
+    def __init__(self) -> None:
+        # コネクションプール再利用のためセッションをキャッシュ
+        self._session = requests.Session()
+
     def call(self, req: AdapterRequest) -> dict[str, Any]:
         start = time.monotonic()
         # APIキー未設定を早期リターンで明示（空文字をBearerトークンとして送らない）
@@ -31,17 +37,22 @@ class GrokAdapter(BaseAdapter):
             if req.system_prompt:
                 messages.append({"role": "system", "content": req.system_prompt})
             messages.append({"role": "user", "content": req.prompt})
-            resp = requests.post(
+            resp = self._session.post(
                 XAI_API_URL,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": req.model, "messages": messages, "max_tokens": 4096},
+                json={"model": req.model, "messages": messages, "max_tokens": DEFAULT_MAX_TOKENS},
                 timeout=req.timeout_ms / 1000,
             )
             elapsed = int((time.monotonic() - start) * 1000)
             if resp.status_code == 401:
                 return make_error_response(req.request_id, req.role, req.model, "AUTH_FAILED", "Unauthorized", elapsed)
             if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", 0)) * 1000
+                # Retry-After は秒数か日付形式で返ることがある。int() 変換失敗時はデフォルト使用
+                retry_after_str = resp.headers.get("Retry-After", "0")
+                try:
+                    retry_after = int(retry_after_str) * 1000
+                except ValueError:
+                    retry_after = 5000  # 日付形式等、解析不能な場合のフォールバック
                 return make_error_response(req.request_id, req.role, req.model, "RATE_LIMIT", "Rate limited", elapsed, retry_after)
             resp.raise_for_status()
             data = resp.json()
@@ -57,6 +68,9 @@ class GrokAdapter(BaseAdapter):
         except requests.ConnectionError:
             elapsed = int((time.monotonic() - start) * 1000)
             return make_error_response(req.request_id, req.role, req.model, "NETWORK_ERROR", "Connection failed", elapsed)
+        except (KeyError, ValueError) as e:
+            elapsed = int((time.monotonic() - start) * 1000)
+            return make_error_response(req.request_id, req.role, req.model, "MODEL_ERROR", f"Unexpected response format: {type(e).__name__}", elapsed)
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
             return make_error_response(req.request_id, req.role, req.model, "MODEL_ERROR", str(e), elapsed)

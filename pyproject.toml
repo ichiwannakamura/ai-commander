@@ -7,8 +7,12 @@ dependencies = [
   "openai>=1.0.0",
   "google-generativeai>=0.8.0",
   "requests>=2.31.0",
-  "python-dotenv>=1.0.0",
+  # python-dotenv は不要（環境変数は親プロセス(TypeScript側)から渡す設計）
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
+dev = ["pytest>=8.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["adapters"]

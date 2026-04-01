@@ -11,7 +11,7 @@ if _ADAPTERS_DIR not in sys.path:
     sys.path.insert(0, _ADAPTERS_DIR)
 
 import openai
-from base_adapter import BaseAdapter, AdapterRequest, make_success_response, make_error_response
+from base_adapter import BaseAdapter, AdapterRequest, DEFAULT_MAX_TOKENS, make_success_response, make_error_response
 
 
 class OpenAIAdapter(BaseAdapter):
@@ -29,7 +29,7 @@ class OpenAIAdapter(BaseAdapter):
             response = self._client.chat.completions.create(
                 model=req.model,
                 messages=messages,
-                max_tokens=4096,
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
             elapsed = int((time.monotonic() - start) * 1000)
             content = response.choices[0].message.content or ""
